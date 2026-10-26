@@ -1,0 +1,7 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Local planning and progress notes requested for this project
+/Exam_OS.txt
+/Progress.txt
