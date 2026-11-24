@@ -23,3 +23,7 @@ func _physics_process(delta: float) -> void:
 func _on_body_entered(body: Node2D) -> void:
 	if body == target:
 		player_caught.emit()
+
+
+func eliminate() -> void:
+	queue_free()

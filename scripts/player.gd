@@ -1,6 +1,12 @@
 extends CharacterBody2D
 
 @export var move_speed: float = 300.0
+@export var shot_cooldown: float = 0.45
+
+const PROJECTILE_SCENE: PackedScene = preload("res://scenes/Projectile.tscn")
+
+var shooting_direction: Vector2 = Vector2.RIGHT
+var shot_cooldown_remaining: float = 0.0
 
 
 func _physics_process(_delta: float) -> void:
@@ -11,3 +17,32 @@ func _physics_process(_delta: float) -> void:
 	var arena_size := get_viewport_rect().size
 	global_position.x = clampf(global_position.x, 18.0, arena_size.x - 18.0)
 	global_position.y = clampf(global_position.y, 18.0, arena_size.y - 18.0)
+
+
+func _process(delta: float) -> void:
+	shot_cooldown_remaining = maxf(shot_cooldown_remaining - delta, 0.0)
+	if Input.is_action_just_pressed("shoot") and shot_cooldown_remaining <= 0.0:
+		_fire_projectile()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not event is InputEventKey or not event.pressed or event.echo:
+		return
+
+	match event.keycode:
+		KEY_UP:
+			shooting_direction = Vector2.UP
+		KEY_DOWN:
+			shooting_direction = Vector2.DOWN
+		KEY_LEFT:
+			shooting_direction = Vector2.LEFT
+		KEY_RIGHT:
+			shooting_direction = Vector2.RIGHT
+
+
+func _fire_projectile() -> void:
+	var projectile := PROJECTILE_SCENE.instantiate() as Area2D
+	projectile.global_position = global_position + shooting_direction * 24.0
+	projectile.set("direction", shooting_direction)
+	get_parent().add_child(projectile)
+	shot_cooldown_remaining = shot_cooldown
