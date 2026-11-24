@@ -15,9 +15,9 @@ const SKIN_PREVIEW_SCRIPT: Script = preload("res://scripts/skin_preview.gd")
 var menu_panel: PanelContainer
 var credits_panel: PanelContainer
 var shop_panel: PanelContainer
+var difficulty_panel: PanelContainer
 var menu_total_coins_value: Label
 var menu_best_score_value: Label
-var difficulty_notice: Label
 var skin_list: VBoxContainer
 var skin_row_buttons: Dictionary = {}
 var shop_balance_label: Label
@@ -28,9 +28,20 @@ var shop_status_label: Label
 var shop_feedback_label: Label
 var shop_action_button: Button
 var selected_skin_id: String = "classic_blue"
+var difficulty_balance_label: Label
+var difficulty_feedback_label: Label
+var unlimited_time_toggle: CheckButton
+var difficulty_status_labels: Dictionary = {}
+var difficulty_action_buttons: Dictionary = {}
+var player_stats: Node
+var skin_catalog: Node
+var difficulty_config: Node
 
 
 func _ready() -> void:
+	player_stats = get_node("/root/PlayerStats")
+	skin_catalog = get_node("/root/SkinCatalog")
+	difficulty_config = get_node("/root/DifficultyConfig")
 	_build_interface()
 
 
@@ -63,17 +74,13 @@ func _build_interface() -> void:
 	var stats_row := HBoxContainer.new()
 	stats_row.add_theme_constant_override("separation", 12)
 	menu_layout.add_child(stats_row)
-	menu_total_coins_value = _make_label(str(PlayerStats.total_coins), 28, Color.WHITE)
-	menu_best_score_value = _make_label(str(PlayerStats.best_score), 28, Color.WHITE)
+	menu_total_coins_value = _make_label(str(_stats_int("total_coins")), 28, Color.WHITE)
+	menu_best_score_value = _make_label(str(_stats_int("best_score")), 28, Color.WHITE)
 	stats_row.add_child(_make_stat_card("LIFETIME COINS", menu_total_coins_value))
 	stats_row.add_child(_make_stat_card("BEST SCORE", menu_best_score_value))
 
-	difficulty_notice = _make_label("Difficulty selection is coming soon.", 14, MUTED_COLOR)
-	difficulty_notice.visible = false
-	menu_layout.add_child(difficulty_notice)
-
 	menu_layout.add_child(_make_button("START", _start_game, ACCENT_COLOR))
-	menu_layout.add_child(_make_button("DIFFICULTY MODE  -  COMING SOON", _show_difficulty_notice))
+	menu_layout.add_child(_make_button("DIFFICULTY MODES", _show_difficulty_panel))
 	menu_layout.add_child(_make_button("SKINS", _show_shop))
 	menu_layout.add_child(_make_button("CREDITS", _show_credits))
 	menu_layout.add_child(_make_button("QUIT GAME", _quit_game))
@@ -90,6 +97,7 @@ func _build_interface() -> void:
 	credits_layout.add_child(_make_label("AI", 18, MUTED_COLOR))
 	credits_layout.add_child(_make_button("BACK TO MENU", _show_menu, ACCENT_COLOR))
 
+	_build_difficulty_panel(center)
 	_build_shop(center)
 
 
@@ -166,6 +174,48 @@ func _make_button(text: String, callback: Callable, font_color: Color = Color.WH
 	return button
 
 
+func _stats_int(property_name: String) -> int:
+	return int(player_stats.get(property_name))
+
+
+func _stats_string(property_name: String) -> String:
+	return str(player_stats.get(property_name))
+
+
+func _stats_bool(property_name: String) -> bool:
+	return bool(player_stats.get(property_name))
+
+
+func _stats_call_bool(method_name: String, argument: String) -> bool:
+	return bool(player_stats.call(method_name, argument))
+
+
+func _all_difficulty_modes() -> Array[Dictionary]:
+	var modes: Array[Dictionary] = []
+	modes.assign(difficulty_config.call("get_all_modes"))
+	return modes
+
+
+func _difficulty_mode(difficulty_id: String) -> Dictionary:
+	var mode: Dictionary = difficulty_config.call("get_mode", difficulty_id)
+	return mode
+
+
+func _all_skins() -> Array[Dictionary]:
+	var skins: Array[Dictionary] = []
+	skins.assign(skin_catalog.call("get_all_skins"))
+	return skins
+
+
+func _skin_definition(skin_id: String) -> Dictionary:
+	var skin: Dictionary = skin_catalog.call("get_skin", skin_id)
+	return skin
+
+
+func _stats_skin_action(method_name: String, skin_id: String) -> bool:
+	return bool(player_stats.call(method_name, skin_id))
+
+
 func _button_style(color: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
@@ -181,22 +231,168 @@ func _start_game() -> void:
 		push_error("Could not start the game: " + error_string(change_error))
 
 
-func _show_difficulty_notice() -> void:
-	difficulty_notice.visible = true
-
-
 func _show_credits() -> void:
 	menu_panel.visible = false
 	shop_panel.visible = false
+	difficulty_panel.visible = false
 	credits_panel.visible = true
 
 
 func _show_menu() -> void:
 	credits_panel.visible = false
 	shop_panel.visible = false
+	difficulty_panel.visible = false
 	menu_panel.visible = true
-	menu_total_coins_value.text = str(PlayerStats.total_coins)
-	menu_best_score_value.text = str(PlayerStats.best_score)
+	menu_total_coins_value.text = str(_stats_int("total_coins"))
+	menu_best_score_value.text = str(_stats_int("best_score"))
+
+
+func _build_difficulty_panel(center: CenterContainer) -> void:
+	difficulty_panel = _make_panel(900.0)
+	difficulty_panel.custom_minimum_size.y = 560.0
+	difficulty_panel.visible = false
+	center.add_child(difficulty_panel)
+	var panel_margin := _make_margin(difficulty_panel)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 8)
+	panel_margin.add_child(layout)
+	layout.add_child(_make_label("DIFFICULTY MODES", 30, ACCENT_COLOR))
+	difficulty_balance_label = _make_label("Lifetime coins: 0  |  Best run: 0", 16, MUTED_COLOR)
+	layout.add_child(difficulty_balance_label)
+	layout.add_child(_make_label("Run records qualify purchases. Lifetime coins pay for unlocks.", 13, MUTED_COLOR))
+	unlimited_time_toggle = CheckButton.new()
+	unlimited_time_toggle.text = "Unlimited time (disable the round countdown)"
+	unlimited_time_toggle.set_pressed_no_signal(_stats_bool("unlimited_time_enabled"))
+	unlimited_time_toggle.toggled.connect(_on_unlimited_time_toggled)
+	layout.add_child(unlimited_time_toggle)
+	layout.add_child(HSeparator.new())
+
+	for mode in _all_difficulty_modes():
+		var difficulty_id: String = mode["id"]
+		var row := HBoxContainer.new()
+		row.custom_minimum_size.y = 74.0
+		row.add_theme_constant_override("separation", 14)
+		layout.add_child(row)
+
+		var mode_info := VBoxContainer.new()
+		mode_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mode_info.add_theme_constant_override("separation", 2)
+		row.add_child(mode_info)
+		var name_label := _make_label(str(mode["name"]), 18, Color.WHITE)
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		mode_info.add_child(name_label)
+		var description_label := _make_label(str(mode["description"]), 12, MUTED_COLOR)
+		description_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		mode_info.add_child(description_label)
+		var requirement_label := _make_label(_difficulty_requirement_text(mode), 12, MUTED_COLOR)
+		requirement_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		mode_info.add_child(requirement_label)
+
+		var action_button := _make_button("", _on_difficulty_action.bind(difficulty_id))
+		action_button.custom_minimum_size.x = 210.0
+		row.add_child(action_button)
+		difficulty_action_buttons[difficulty_id] = action_button
+		difficulty_status_labels[difficulty_id] = name_label
+
+	difficulty_feedback_label = _make_label("", 14, ACCENT_COLOR)
+	layout.add_child(difficulty_feedback_label)
+	layout.add_child(_make_button("BACK TO MENU", _show_menu))
+	_refresh_difficulty_panel()
+
+
+func _difficulty_requirement_text(mode: Dictionary) -> String:
+	var requirement := int(mode.get("run_requirement", 0))
+	var price := int(mode.get("purchase_price", 0))
+	if requirement == 0:
+		return "Run record: none  |  Price: free"
+	return "Run record: %d coins  |  Price: %d lifetime coins" % [requirement, price]
+
+
+func _difficulty_status(difficulty_id: String, mode: Dictionary) -> String:
+	if not bool(mode.get("implemented", false)):
+		return "Coming Soon"
+	if _stats_string("selected_difficulty_id") == difficulty_id:
+		return "Currently Selected"
+	if _stats_call_bool("owns_difficulty", difficulty_id):
+		if difficulty_id == "easy":
+			return "Available"
+		return "Purchased"
+	if _stats_int("highest_run_coins") >= int(mode.get("run_requirement", 0)):
+		return "Eligible for Purchase"
+	return "Locked"
+
+
+func _refresh_difficulty_panel() -> void:
+	if not is_instance_valid(difficulty_balance_label):
+		return
+	difficulty_balance_label.text = "Lifetime coins: %d  |  Best run: %d" % [
+		_stats_int("total_coins"),
+		_stats_int("highest_run_coins"),
+	]
+
+	for mode in _all_difficulty_modes():
+		var difficulty_id: String = mode["id"]
+		var status := _difficulty_status(difficulty_id, mode)
+		var status_label := difficulty_status_labels[difficulty_id] as Label
+		status_label.text = "%s  -  %s" % [mode["name"], status]
+		var action_button := difficulty_action_buttons[difficulty_id] as Button
+		if status == "Coming Soon":
+			action_button.text = "COMING SOON"
+			action_button.disabled = true
+		elif status == "Currently Selected":
+			action_button.text = "CURRENTLY SELECTED"
+			action_button.disabled = true
+		elif status == "Purchased" or status == "Available":
+			action_button.text = "SELECT"
+			action_button.disabled = false
+		elif status == "Eligible for Purchase":
+			action_button.text = "PURCHASE - %d COINS" % int(mode["purchase_price"])
+			action_button.disabled = false
+		else:
+			action_button.text = "LOCKED"
+			action_button.disabled = true
+
+
+func _show_difficulty_panel() -> void:
+	menu_panel.visible = false
+	credits_panel.visible = false
+	shop_panel.visible = false
+	difficulty_panel.visible = true
+	difficulty_feedback_label.text = ""
+	unlimited_time_toggle.button_pressed = _stats_bool("unlimited_time_enabled")
+	_refresh_difficulty_panel()
+
+
+func _on_unlimited_time_toggled(enabled: bool) -> void:
+	if not bool(player_stats.call("set_unlimited_time_enabled", enabled)):
+		unlimited_time_toggle.set_pressed_no_signal(_stats_bool("unlimited_time_enabled"))
+		difficulty_feedback_label.text = "Could not save the unlimited-time setting."
+
+
+func _on_difficulty_action(difficulty_id: String) -> void:
+	var mode := _difficulty_mode(difficulty_id)
+	if mode.is_empty():
+		return
+	if not bool(mode.get("implemented", false)):
+		difficulty_feedback_label.text = "Doomsday is coming soon and cannot be selected or purchased yet."
+		return
+
+	if _stats_call_bool("owns_difficulty", difficulty_id):
+		if _stats_call_bool("select_difficulty", difficulty_id):
+			difficulty_feedback_label.text = "%s selected." % mode["name"]
+		else:
+			difficulty_feedback_label.text = "Could not save this selection."
+	elif _stats_int("highest_run_coins") < int(mode.get("run_requirement", 0)):
+		difficulty_feedback_label.text = "Reach %d coins in one run to qualify." % int(mode["run_requirement"])
+	elif _stats_int("total_coins") < int(mode.get("purchase_price", 0)):
+		difficulty_feedback_label.text = "Not enough lifetime coins to purchase this mode."
+	elif _stats_call_bool("purchase_difficulty", difficulty_id):
+		difficulty_feedback_label.text = "%s purchased. Select it to use this mode." % mode["name"]
+	else:
+		difficulty_feedback_label.text = "Could not save this purchase."
+
+	_refresh_difficulty_panel()
 
 
 func _build_shop(center: CenterContainer) -> void:
@@ -226,7 +422,7 @@ func _build_shop(center: CenterContainer) -> void:
 	skin_list.add_theme_constant_override("separation", 8)
 	scroll.add_child(skin_list)
 
-	for skin in SkinCatalog.get_all_skins():
+	for skin in _all_skins():
 		var skin_id: String = skin["id"]
 		var row := HBoxContainer.new()
 		row.custom_minimum_size.y = 58.0
@@ -275,7 +471,7 @@ func _show_shop() -> void:
 	menu_panel.visible = false
 	credits_panel.visible = false
 	shop_panel.visible = true
-	selected_skin_id = PlayerStats.equipped_skin_id
+	selected_skin_id = _stats_string("equipped_skin_id")
 	shop_feedback_label.text = ""
 	_refresh_shop()
 
@@ -287,9 +483,9 @@ func _select_skin(skin_id: String) -> void:
 
 
 func _refresh_shop() -> void:
-	shop_balance_label.text = "Lifetime coins: %d" % PlayerStats.total_coins
+	shop_balance_label.text = "Lifetime coins: %d" % _stats_int("total_coins")
 
-	for skin in SkinCatalog.get_all_skins():
+	for skin in _all_skins():
 		var skin_id: String = skin["id"]
 		var status := _skin_status(skin_id)
 		var row_button := skin_row_buttons[skin_id] as Button
@@ -299,7 +495,7 @@ func _refresh_shop() -> void:
 			_button_style(BUTTON_HOVER_COLOR if skin_id == selected_skin_id else BUTTON_COLOR)
 		)
 
-	var selected_skin := SkinCatalog.get_skin(selected_skin_id)
+	var selected_skin := _skin_definition(selected_skin_id)
 	if selected_skin.is_empty():
 		return
 
@@ -319,27 +515,27 @@ func _refresh_shop() -> void:
 
 
 func _skin_status(skin_id: String) -> String:
-	if PlayerStats.equipped_skin_id == skin_id:
+	if _stats_string("equipped_skin_id") == skin_id:
 		return "EQUIPPED"
-	if PlayerStats.owns_skin(skin_id):
+	if _stats_call_bool("owns_skin", skin_id):
 		return "OWNED"
 	return "LOCKED"
 
 
 func _perform_skin_action() -> void:
-	var skin := SkinCatalog.get_skin(selected_skin_id)
+	var skin := _skin_definition(selected_skin_id)
 	if skin.is_empty():
 		return
 
-	if PlayerStats.owns_skin(selected_skin_id):
-		if PlayerStats.equip_skin(selected_skin_id):
+	if _stats_call_bool("owns_skin", selected_skin_id):
+		if _stats_skin_action("equip_skin", selected_skin_id):
 			shop_feedback_label.text = "%s equipped. It will be used in your next game." % skin["name"]
 		else:
 			shop_feedback_label.text = "Could not equip this skin."
 	else:
-		if PlayerStats.purchase_skin(selected_skin_id):
+		if _stats_skin_action("purchase_skin", selected_skin_id):
 			shop_feedback_label.text = "%s purchased. You can equip it now." % skin["name"]
-		elif PlayerStats.total_coins < int(skin["price"]):
+		elif _stats_int("total_coins") < int(skin["price"]):
 			shop_feedback_label.text = "Not enough lifetime coins to purchase this skin."
 		else:
 			shop_feedback_label.text = "Purchase could not be saved. Please try again."

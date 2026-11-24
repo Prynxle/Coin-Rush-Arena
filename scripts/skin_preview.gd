@@ -5,6 +5,12 @@ extends Control
 		skin_id = value
 		queue_redraw()
 
+var skin_catalog: Node
+
+
+func _ready() -> void:
+	skin_catalog = get_node("/root/SkinCatalog")
+
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
@@ -12,16 +18,19 @@ func _notification(what: int) -> void:
 
 
 func _draw() -> void:
-	if not SkinCatalog.has_skin(skin_id):
+	if not bool(skin_catalog.call("has_skin", skin_id)):
 		return
 
 	var scale_factor := minf(size.x, size.y) / 42.0
 	var center := size * 0.5
-	_draw_shape(SkinCatalog.get_polygon(skin_id), SkinCatalog.get_color(skin_id), center, scale_factor)
+	var shape: PackedVector2Array = skin_catalog.call("get_polygon", skin_id)
+	var skin_color: Color = skin_catalog.call("get_color", skin_id)
+	_draw_shape(shape, skin_color, center, scale_factor)
 
-	var accent_polygon := SkinCatalog.get_accent_polygon(skin_id)
+	var accent_polygon: PackedVector2Array = skin_catalog.call("get_accent_polygon", skin_id)
 	if not accent_polygon.is_empty():
-		_draw_shape(accent_polygon, SkinCatalog.get_accent_color(skin_id), center, scale_factor)
+		var accent_color: Color = skin_catalog.call("get_accent_color", skin_id)
+		_draw_shape(accent_polygon, accent_color, center, scale_factor)
 
 
 func _draw_shape(polygon: PackedVector2Array, color: Color, center: Vector2, scale_factor: float) -> void:

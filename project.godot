@@ -17,6 +17,7 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+DifficultyConfig="*res://scripts/difficulty_config.gd"
 SkinCatalog="*res://scripts/skin_catalog.gd"
 PlayerStats="*res://scripts/player_stats.gd"
 

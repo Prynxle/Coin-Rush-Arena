@@ -2,23 +2,25 @@ extends Node2D
 
 const COIN_SCENE: PackedScene = preload("res://scenes/Coin.tscn")
 const ENEMY_SCENE: PackedScene = preload("res://scenes/Enemy.tscn")
+const DOOMSDAY_BOSS_SCENE: PackedScene = preload("res://scenes/DoomsdayBoss.tscn")
 const MAIN_SCENE_PATH: String = "res://scenes/Main.tscn"
 const MAIN_MENU_SCENE_PATH: String = "res://scenes/MainMenu.tscn"
 const INITIAL_COIN_COUNT: int = 8
-const INITIAL_ENEMY_COUNT: int = 7
-const MAX_SPAWN_ATTEMPTS: int = 20
+const INITIAL_ENEMY_COUNT: int = 3
+const MAX_SPAWN_ATTEMPTS: int = 50
 const COIN_SPAWN_RADIUS: float = 16.0
 const ENEMY_SPAWN_RADIUS: float = 18.0
+const BOSS_SPAWN_RADIUS: float = 34.0
 
-@export var round_duration_seconds: float = 60.0
-@export var coin_spawn_interval: float = 0.5
+@export var round_duration_seconds: float = 180.0
+@export var coin_spawn_interval: float = 1.0
 @export var max_coins: int = 20
 @export var enemy_multiplication_interval: float = 8.0
-@export var max_enemies: int = 30
+@export var max_enemies: int = 100
 @export var enemies_per_reproduction: int = 4
 
 var score: int = 0
-var time_remaining: float = 60.0
+var time_remaining: float = 180.0
 var round_ended: bool = false
 var is_paused: bool = false
 var is_loading_scene: bool = false
@@ -26,10 +28,16 @@ var wait_one_loading_frame: bool = false
 var coin_spawn_elapsed: float = 0.0
 var enemy_multiplication_elapsed: float = 0.0
 var initial_spawn_pending: bool = true
+var last_coin_reward: int = 0
+var run_elapsed_seconds: float = 0.0
+var doomsday_enemy_spawn_index: int = 0
+var doomsday_boss_spawned: bool = false
+var boss_spawn_retry_remaining: float = 0.0
 
 @onready var arena: Node2D = $Arena
 @onready var player: CharacterBody2D = $Arena/Player
 @onready var player_stats: Node = get_node("/root/PlayerStats")
+@onready var difficulty_config: Node = get_node("/root/DifficultyConfig")
 @onready var score_label: Label = $HUD/ScoreLabel
 @onready var timer_label: Label = $HUD/TimerLabel
 @onready var best_score_label: Label = $HUD/BestScoreLabel
@@ -58,6 +66,9 @@ func _physics_process(delta: float) -> void:
 	if round_ended or is_paused:
 		return
 
+	run_elapsed_seconds += delta
+	_try_spawn_doomsday_boss(delta)
+
 	if initial_spawn_pending:
 		initial_spawn_pending = false
 		_spawn_coins()
@@ -77,6 +88,10 @@ func _process(delta: float) -> void:
 		return
 
 	if round_ended or is_paused:
+		return
+
+	if bool(player_stats.get("unlimited_time_enabled")):
+		_update_timer_label()
 		return
 
 	time_remaining = maxf(time_remaining - delta, 0.0)
@@ -164,11 +179,17 @@ func _show_threaded_load_error(message: String) -> void:
 
 
 func _update_timer_label() -> void:
-	timer_label.text = "Time: %d" % ceili(time_remaining)
+	if bool(player_stats.get("unlimited_time_enabled")):
+		timer_label.text = "Time: Unlimited"
+	else:
+		timer_label.text = "Time: %d" % ceili(time_remaining)
 
 
 func _update_score_labels() -> void:
-	score_label.text = "Score: %d" % score
+	if last_coin_reward > 0:
+		score_label.text = "Coins: %d  (+%d)" % [score, last_coin_reward]
+	else:
+		score_label.text = "Coins: %d" % score
 	best_score_label.text = "Best: %d" % int(player_stats.get("best_score"))
 
 
@@ -178,7 +199,9 @@ func _spawn_coins() -> void:
 
 
 func _spawn_enemies() -> void:
-	for _enemy_index in range(mini(INITIAL_ENEMY_COUNT, max_enemies)):
+	var mode := _active_difficulty()
+	var initial_enemy_count := int(mode.get("initial_enemy_count", INITIAL_ENEMY_COUNT))
+	for _enemy_index in range(mini(initial_enemy_count, max_enemies)):
 		_spawn_enemy()
 
 
@@ -189,11 +212,14 @@ func _update_spawning(delta: float) -> void:
 			coin_spawn_elapsed = 0.0
 			_spawn_coin()
 
-	if enemy_multiplication_interval > 0.0 and active_group_count("enemies") < max_enemies:
+	var mode := _active_difficulty()
+	var enemy_spawn_interval := float(mode.get("enemy_spawn_interval", enemy_multiplication_interval))
+	if enemy_spawn_interval > 0.0 and active_group_count("enemies") < max_enemies:
 		enemy_multiplication_elapsed += delta
-		if enemy_multiplication_elapsed >= enemy_multiplication_interval:
+		if enemy_multiplication_elapsed >= enemy_spawn_interval:
 			enemy_multiplication_elapsed = 0.0
-			for _offspring_index in range(enemies_per_reproduction):
+			var enemies_per_spawn := int(mode.get("enemies_per_spawn", enemies_per_reproduction))
+			for _offspring_index in range(enemies_per_spawn):
 				if not _spawn_enemy():
 					break
 
@@ -217,16 +243,72 @@ func _spawn_enemy() -> bool:
 	if active_group_count("enemies") >= max_enemies:
 		return false
 
-	var spawn_position: Vector2 = _find_valid_spawn_position(ENEMY_SPAWN_RADIUS)
+	var mode := _active_difficulty()
+	var difficulty_id := str(mode["id"])
+	var is_large_doomsday_enemy := false
+	var next_doomsday_spawn_index := doomsday_enemy_spawn_index + 1
+	if difficulty_id == "doomsday":
+		var large_enemy_every := maxi(int(mode.get("large_enemy_every", 3)), 1)
+		is_large_doomsday_enemy = next_doomsday_spawn_index % large_enemy_every == 0
+
+	var enemy_settings: Dictionary = difficulty_config.call(
+		"get_enemy_settings",
+		difficulty_id,
+		is_large_doomsday_enemy
+	)
+	var size_multiplier := maxf(float(enemy_settings.get("size_multiplier", 1.0)), 0.1)
+	var spawn_position: Vector2 = _find_valid_spawn_position(ENEMY_SPAWN_RADIUS * size_multiplier)
 	if spawn_position == Vector2.ZERO:
 		return false
 
 	var enemy := ENEMY_SCENE.instantiate() as Area2D
 	enemy.position = spawn_position
 	enemy.set("target", player)
+	enemy.set("difficulty_settings", enemy_settings)
+	enemy.scale = Vector2.ONE * size_multiplier
 	enemy.connect("player_caught", _on_player_caught)
 	arena.add_child(enemy)
+	if difficulty_id == "doomsday":
+		doomsday_enemy_spawn_index = next_doomsday_spawn_index
 	return true
+
+
+func _try_spawn_doomsday_boss(delta: float) -> void:
+	if doomsday_boss_spawned:
+		return
+
+	var mode := _active_difficulty()
+	var spawn_delay := float(mode.get("boss_spawn_after_seconds", -1.0))
+	if spawn_delay < 0.0 or run_elapsed_seconds < spawn_delay:
+		return
+
+	if boss_spawn_retry_remaining > 0.0:
+		boss_spawn_retry_remaining = maxf(boss_spawn_retry_remaining - delta, 0.0)
+		return
+
+	var spawn_position := _find_valid_spawn_position(BOSS_SPAWN_RADIUS)
+	if spawn_position == Vector2.ZERO:
+		boss_spawn_retry_remaining = 1.0
+		return
+
+	var boss := DOOMSDAY_BOSS_SCENE.instantiate() as Area2D
+	boss.position = spawn_position
+	boss.set("fire_interval", float(mode.get("boss_fire_interval", 4.0)))
+	boss.set("projectile_count", int(mode.get("boss_projectile_count", 8)))
+	boss.set("projectile_speed", float(mode.get("boss_projectile_speed", 300.0)))
+	var hard_mode: Dictionary = difficulty_config.call("get_mode", "hard")
+	var hard_health := maxi(roundi(float(hard_mode.get("enemy_health_multiplier", 1.0))), 1)
+	boss.set("projectile_damage", hard_health * 4)
+	arena.add_child(boss)
+	doomsday_boss_spawned = true
+
+
+func _active_difficulty() -> Dictionary:
+	var difficulty_id := str(player_stats.get("selected_difficulty_id"))
+	var mode: Dictionary = difficulty_config.call("get_mode", difficulty_id)
+	if mode.is_empty() or not bool(mode.get("implemented", false)):
+		mode = difficulty_config.call("get_mode", "easy")
+	return mode
 
 
 func _find_valid_spawn_position(radius: float) -> Vector2:
@@ -274,8 +356,11 @@ func _on_coin_collected() -> void:
 	var active_coins_before: int = get_tree().get_nodes_in_group("coins").size()
 	print("Active coins before collection: ", active_coins_before)
 
-	score += 1
-	player_stats.call("record_coin", score)
+	var active_difficulty := _active_difficulty()
+	var coin_reward := int(difficulty_config.call("get_coin_reward", 1, str(active_difficulty["id"])))
+	score += coin_reward
+	last_coin_reward = coin_reward
+	player_stats.call("record_coin", coin_reward, score)
 
 	await get_tree().process_frame
 	var active_coins_after: int = get_tree().get_nodes_in_group("coins").size()
@@ -284,6 +369,11 @@ func _on_coin_collected() -> void:
 
 func _on_player_caught() -> void:
 	_end_round("An enemy caught you!")
+
+
+func on_doomsday_projectile_hit(body: Node2D) -> void:
+	if body == player:
+		_end_round("A Doomsday projectile hit you!")
 
 
 func _return_to_main_menu() -> void:
@@ -311,3 +401,7 @@ func _end_round(reason: String) -> void:
 
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		enemy.queue_free()
+	for boss in get_tree().get_nodes_in_group("doomsday_bosses"):
+		boss.queue_free()
+	for projectile in get_tree().get_nodes_in_group("doomsday_projectiles"):
+		projectile.queue_free()

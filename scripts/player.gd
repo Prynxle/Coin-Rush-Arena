@@ -10,6 +10,8 @@ var shot_cooldown_remaining: float = 0.0
 
 @onready var visual: Polygon2D = $Visual
 @onready var accent_visual: Polygon2D = $SkinAccent
+@onready var player_stats: Node = get_node("/root/PlayerStats")
+@onready var skin_catalog: Node = get_node("/root/SkinCatalog")
 
 
 func _ready() -> void:
@@ -56,12 +58,16 @@ func _fire_projectile() -> void:
 
 
 func _apply_equipped_skin() -> void:
-	var skin_id := PlayerStats.equipped_skin_id
-	if not SkinCatalog.has_skin(skin_id):
-		skin_id = SkinCatalog.CLASSIC_SKIN_ID
+	var skin_id := str(player_stats.get("equipped_skin_id"))
+	if not bool(skin_catalog.call("has_skin", skin_id)):
+		skin_id = "classic_blue"
 
-	visual.color = SkinCatalog.get_color(skin_id)
-	visual.polygon = SkinCatalog.get_polygon(skin_id)
-	accent_visual.color = SkinCatalog.get_accent_color(skin_id)
-	accent_visual.polygon = SkinCatalog.get_accent_polygon(skin_id)
+	var skin_color: Color = skin_catalog.call("get_color", skin_id)
+	var skin_polygon: PackedVector2Array = skin_catalog.call("get_polygon", skin_id)
+	var accent_color: Color = skin_catalog.call("get_accent_color", skin_id)
+	var accent_polygon: PackedVector2Array = skin_catalog.call("get_accent_polygon", skin_id)
+	visual.color = skin_color
+	visual.polygon = skin_polygon
+	accent_visual.color = accent_color
+	accent_visual.polygon = accent_polygon
 	accent_visual.visible = not accent_visual.polygon.is_empty()

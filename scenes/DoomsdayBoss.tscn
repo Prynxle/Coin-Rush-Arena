@@ -1,0 +1,22 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/doomsday_boss.gd" id="1_script"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_boss"]
+radius = 30.0
+
+[node name="DoomsdayBoss" type="Area2D"]
+collision_layer = 0
+collision_mask = 0
+script = ExtResource("1_script")
+
+[node name="Visual" type="Polygon2D" parent="."]
+color = Color(0.2, 0.95, 0.42, 1)
+polygon = PackedVector2Array(0, -30, 23, 0, 0, 30, -23, 0)
+
+[node name="Core" type="Polygon2D" parent="."]
+color = Color(0.08, 0.42, 0.22, 1)
+polygon = PackedVector2Array(0, -15, 11, 0, 0, 15, -11, 0)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_boss")
