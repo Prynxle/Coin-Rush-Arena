@@ -11,9 +11,14 @@ config_version=5
 [application]
 
 config/name="Coin Rush Arena"
-run/main_scene="res://scenes/Main.tscn"
+run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
+
+[autoload]
+
+SkinCatalog="*res://scripts/skin_catalog.gd"
+PlayerStats="*res://scripts/player_stats.gd"
 
 [display]
 

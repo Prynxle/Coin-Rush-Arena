@@ -3,9 +3,7 @@ extends Node2D
 const COIN_SCENE: PackedScene = preload("res://scenes/Coin.tscn")
 const ENEMY_SCENE: PackedScene = preload("res://scenes/Enemy.tscn")
 const MAIN_SCENE_PATH: String = "res://scenes/Main.tscn"
-const HIGH_SCORE_PATH: String = "user://high_score.cfg"
-const HIGH_SCORE_SECTION: String = "scores"
-const HIGH_SCORE_KEY: String = "best"
+const MAIN_MENU_SCENE_PATH: String = "res://scenes/MainMenu.tscn"
 const INITIAL_COIN_COUNT: int = 8
 const INITIAL_ENEMY_COUNT: int = 7
 const MAX_SPAWN_ATTEMPTS: int = 20
@@ -13,14 +11,13 @@ const COIN_SPAWN_RADIUS: float = 16.0
 const ENEMY_SPAWN_RADIUS: float = 18.0
 
 @export var round_duration_seconds: float = 60.0
-@export var coin_spawn_interval: float = 2.0
+@export var coin_spawn_interval: float = 0.5
 @export var max_coins: int = 20
 @export var enemy_multiplication_interval: float = 8.0
 @export var max_enemies: int = 30
 @export var enemies_per_reproduction: int = 4
 
 var score: int = 0
-var best_score: int = 0
 var time_remaining: float = 60.0
 var round_ended: bool = false
 var is_paused: bool = false
@@ -32,6 +29,7 @@ var initial_spawn_pending: bool = true
 
 @onready var arena: Node2D = $Arena
 @onready var player: CharacterBody2D = $Arena/Player
+@onready var player_stats: Node = get_node("/root/PlayerStats")
 @onready var score_label: Label = $HUD/ScoreLabel
 @onready var timer_label: Label = $HUD/TimerLabel
 @onready var best_score_label: Label = $HUD/BestScoreLabel
@@ -41,6 +39,7 @@ var initial_spawn_pending: bool = true
 @onready var pause_button: Button = $HUD/PauseButton
 @onready var pause_label: Label = $HUD/PauseLabel
 @onready var restart_button: Button = $HUD/GameOverPanel/RestartButton
+@onready var main_menu_button: Button = $HUD/GameOverPanel/MainMenuButton
 @onready var loading_panel: Control = $HUD/LoadingPanel
 @onready var loading_label: Label = $HUD/LoadingPanel/LoadingLabel
 
@@ -48,8 +47,8 @@ var initial_spawn_pending: bool = true
 func _ready() -> void:
 	pause_button.pressed.connect(_toggle_pause)
 	restart_button.pressed.connect(_begin_threaded_restart)
+	main_menu_button.pressed.connect(_return_to_main_menu)
 	player.position = get_viewport_rect().size * 0.5
-	_load_best_score()
 	_update_score_labels()
 	time_remaining = round_duration_seconds
 	_update_timer_label()
@@ -168,34 +167,9 @@ func _update_timer_label() -> void:
 	timer_label.text = "Time: %d" % ceili(time_remaining)
 
 
-func _load_best_score() -> void:
-	var config := ConfigFile.new()
-	var load_error := config.load(HIGH_SCORE_PATH)
-
-	if load_error == ERR_FILE_NOT_FOUND:
-		best_score = 0
-		return
-
-	if load_error != OK:
-		best_score = 0
-		push_error("Could not load the best score: " + error_string(load_error))
-		return
-
-	best_score = maxi(int(config.get_value(HIGH_SCORE_SECTION, HIGH_SCORE_KEY, 0)), 0)
-
-
-func _save_best_score() -> void:
-	var config := ConfigFile.new()
-	config.set_value(HIGH_SCORE_SECTION, HIGH_SCORE_KEY, best_score)
-
-	var save_error := config.save(HIGH_SCORE_PATH)
-	if save_error != OK:
-		push_error("Could not save the best score: " + error_string(save_error))
-
-
 func _update_score_labels() -> void:
 	score_label.text = "Score: %d" % score
-	best_score_label.text = "Best: %d" % best_score
+	best_score_label.text = "Best: %d" % int(player_stats.get("best_score"))
 
 
 func _spawn_coins() -> void:
@@ -301,9 +275,7 @@ func _on_coin_collected() -> void:
 	print("Active coins before collection: ", active_coins_before)
 
 	score += 1
-	if score > best_score:
-		best_score = score
-		_save_best_score()
+	player_stats.call("record_coin", score)
 
 	await get_tree().process_frame
 	var active_coins_after: int = get_tree().get_nodes_in_group("coins").size()
@@ -312,6 +284,12 @@ func _on_coin_collected() -> void:
 
 func _on_player_caught() -> void:
 	_end_round("An enemy caught you!")
+
+
+func _return_to_main_menu() -> void:
+	var change_error := get_tree().change_scene_to_file(MAIN_MENU_SCENE_PATH)
+	if change_error != OK:
+		push_error("Could not return to the main menu: " + error_string(change_error))
 
 
 func _end_round(reason: String) -> void:
@@ -326,6 +304,7 @@ func _end_round(reason: String) -> void:
 	game_over_panel.visible = true
 	pause_button.disabled = true
 	pause_button.visible = false
+	main_menu_button.visible = true
 
 	for coin in get_tree().get_nodes_in_group("coins"):
 		coin.queue_free()

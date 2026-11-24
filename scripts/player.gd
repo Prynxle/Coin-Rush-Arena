@@ -8,6 +8,13 @@ const PROJECTILE_SCENE: PackedScene = preload("res://scenes/Projectile.tscn")
 var shooting_direction: Vector2 = Vector2.RIGHT
 var shot_cooldown_remaining: float = 0.0
 
+@onready var visual: Polygon2D = $Visual
+@onready var accent_visual: Polygon2D = $SkinAccent
+
+
+func _ready() -> void:
+	_apply_equipped_skin()
+
 
 func _physics_process(_delta: float) -> void:
 	var direction := Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -46,3 +53,15 @@ func _fire_projectile() -> void:
 	projectile.set("direction", shooting_direction)
 	get_parent().add_child(projectile)
 	shot_cooldown_remaining = shot_cooldown
+
+
+func _apply_equipped_skin() -> void:
+	var skin_id := PlayerStats.equipped_skin_id
+	if not SkinCatalog.has_skin(skin_id):
+		skin_id = SkinCatalog.CLASSIC_SKIN_ID
+
+	visual.color = SkinCatalog.get_color(skin_id)
+	visual.polygon = SkinCatalog.get_polygon(skin_id)
+	accent_visual.color = SkinCatalog.get_accent_color(skin_id)
+	accent_visual.polygon = SkinCatalog.get_accent_polygon(skin_id)
+	accent_visual.visible = not accent_visual.polygon.is_empty()
