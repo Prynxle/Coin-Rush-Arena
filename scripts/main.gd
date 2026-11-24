@@ -33,6 +33,13 @@ var run_elapsed_seconds: float = 0.0
 var doomsday_enemy_spawn_index: int = 0
 var doomsday_boss_spawned: bool = false
 var boss_spawn_retry_remaining: float = 0.0
+var best_score_at_start: int = 0
+var new_best_achieved: bool = false
+var coin_feedback_remaining: float = 0.0
+var score_bump_tween: Tween
+var pause_overlay: Control
+var pause_card: PanelContainer
+var hud_button_tweens: Dictionary = {}
 
 @onready var arena: Node2D = $Arena
 @onready var player: CharacterBody2D = $Arena/Player
@@ -56,7 +63,10 @@ func _ready() -> void:
 	pause_button.pressed.connect(_toggle_pause)
 	restart_button.pressed.connect(_begin_threaded_restart)
 	main_menu_button.pressed.connect(_return_to_main_menu)
+	best_score_at_start = int(player_stats.get("best_score"))
 	player.position = get_viewport_rect().size * 0.5
+	_style_game_hud()
+	_build_pause_overlay()
 	_update_score_labels()
 	time_remaining = round_duration_seconds
 	_update_timer_label()
@@ -78,6 +88,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	coin_feedback_remaining = maxf(coin_feedback_remaining - delta, 0.0)
 	_update_score_labels()
 
 	if is_loading_scene:
@@ -113,7 +124,13 @@ func _toggle_pause() -> void:
 	is_paused = not is_paused
 	get_tree().paused = is_paused
 	pause_button.text = "Resume" if is_paused else "Pause"
-	pause_label.visible = is_paused
+	pause_label.visible = false
+	if is_instance_valid(pause_overlay):
+		pause_overlay.visible = is_paused
+		if is_paused:
+			pause_overlay.modulate.a = 0.0
+			var pause_tween := create_tween()
+			pause_tween.tween_property(pause_overlay, "modulate:a", 1.0, 0.16)
 
 
 func _begin_threaded_restart() -> void:
@@ -180,17 +197,17 @@ func _show_threaded_load_error(message: String) -> void:
 
 func _update_timer_label() -> void:
 	if bool(player_stats.get("unlimited_time_enabled")):
-		timer_label.text = "Time: Unlimited"
+		timer_label.text = "TIME: Unlimited"
 	else:
-		timer_label.text = "Time: %d" % ceili(time_remaining)
+		timer_label.text = "TIME: %d" % ceili(time_remaining)
 
 
 func _update_score_labels() -> void:
-	if last_coin_reward > 0:
-		score_label.text = "Coins: %d  (+%d)" % [score, last_coin_reward]
+	if last_coin_reward > 0 and coin_feedback_remaining > 0.0:
+		score_label.text = "COINS  %d   +%d" % [score, last_coin_reward]
 	else:
-		score_label.text = "Coins: %d" % score
-	best_score_label.text = "Best: %d" % int(player_stats.get("best_score"))
+		score_label.text = "COINS  %d" % score
+	best_score_label.text = "BEST  %d" % int(player_stats.get("best_score"))
 
 
 func _spawn_coins() -> void:
@@ -360,7 +377,11 @@ func _on_coin_collected() -> void:
 	var coin_reward := int(difficulty_config.call("get_coin_reward", 1, str(active_difficulty["id"])))
 	score += coin_reward
 	last_coin_reward = coin_reward
+	coin_feedback_remaining = 0.9
+	if score > best_score_at_start:
+		new_best_achieved = true
 	player_stats.call("record_coin", coin_reward, score)
+	_bump_score_display()
 
 	await get_tree().process_frame
 	var active_coins_after: int = get_tree().get_nodes_in_group("coins").size()
@@ -377,6 +398,8 @@ func on_doomsday_projectile_hit(body: Node2D) -> void:
 
 
 func _return_to_main_menu() -> void:
+	get_tree().paused = false
+	is_paused = false
 	var change_error := get_tree().change_scene_to_file(MAIN_MENU_SCENE_PATH)
 	if change_error != OK:
 		push_error("Could not return to the main menu: " + error_string(change_error))
@@ -389,9 +412,27 @@ func _end_round(reason: String) -> void:
 	round_ended = true
 	print("Round ended: ", reason)
 	player.set_physics_process(false)
+	player.call("play_death_feedback")
 	game_over_label.text = reason
-	final_score_label.text = "Final score: %d" % score
+	final_score_label.text = "RUN COINS  %d\nBEST SCORE  %d%s" % [
+		score,
+		int(player_stats.get("best_score")),
+		"  |  NEW RECORD!" if new_best_achieved else "",
+	]
+	final_score_label.add_theme_color_override("font_color", Color("#ffd479") if new_best_achieved else Color("#e4f2ff"))
+	final_score_label.offset_top = -4.0
+	final_score_label.offset_bottom = 62.0
+	final_score_label.offset_left = -240.0
+	final_score_label.offset_right = 240.0
+	restart_button.offset_top = 88.0
+	restart_button.offset_bottom = 132.0
+	main_menu_button.offset_top = 144.0
+	main_menu_button.offset_bottom = 188.0
 	game_over_panel.visible = true
+	game_over_panel.modulate.a = 0.0
+	var game_over_tween := create_tween()
+	game_over_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	game_over_tween.tween_property(game_over_panel, "modulate:a", 1.0, 0.24)
 	pause_button.disabled = true
 	pause_button.visible = false
 	main_menu_button.visible = true
@@ -405,3 +446,199 @@ func _end_round(reason: String) -> void:
 		boss.queue_free()
 	for projectile in get_tree().get_nodes_in_group("doomsday_projectiles"):
 		projectile.queue_free()
+
+
+func _style_game_hud() -> void:
+	var hud_panel := Panel.new()
+	hud_panel.position = Vector2(14.0, 12.0)
+	hud_panel.size = Vector2(330.0, 132.0)
+	hud_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.025, 0.07, 0.13, 0.88)
+	panel_style.border_color = Color(0.18, 0.78, 0.92, 0.38)
+	panel_style.set_border_width_all(1)
+	panel_style.set_corner_radius_all(12)
+	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.22)
+	panel_style.shadow_size = 8
+	hud_panel.add_theme_stylebox_override("panel", panel_style)
+	$HUD.add_child(hud_panel)
+	$HUD.move_child(hud_panel, 0)
+	_style_hud_label(score_label, Color("#ffd479"), 23)
+	_style_hud_label(timer_label, Color("#63e7df"), 18)
+	_style_hud_label(best_score_label, Color("#a9c6e4"), 18)
+	_style_game_button(pause_button, Color("#1c5168"))
+	_style_game_button(restart_button, Color("#16635e"))
+	_style_game_button(main_menu_button, Color("#263b59"))
+	$HUD/LoadingPanel/Shade.color = Color(0.01, 0.025, 0.06, 0.86)
+	loading_label.add_theme_color_override("font_color", Color("#63e7df"))
+	loading_label.add_theme_font_size_override("font_size", 26)
+	var game_over_card := PanelContainer.new()
+	game_over_card.anchor_left = 0.5
+	game_over_card.anchor_top = 0.5
+	game_over_card.anchor_right = 0.5
+	game_over_card.anchor_bottom = 0.5
+	game_over_card.offset_left = -280.0
+	game_over_card.offset_top = -220.0
+	game_over_card.offset_right = 280.0
+	game_over_card.offset_bottom = 220.0
+	game_over_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color("#0e1c30")
+	card_style.border_color = Color("#3c8299")
+	card_style.set_border_width_all(1)
+	card_style.set_corner_radius_all(20)
+	card_style.shadow_color = Color(0.0, 0.0, 0.0, 0.4)
+	card_style.shadow_size = 18
+	game_over_card.add_theme_stylebox_override("panel", card_style)
+	game_over_panel.add_child(game_over_card)
+	game_over_panel.move_child(game_over_card, 1)
+	game_over_label.add_theme_color_override("font_color", Color("#63e7df"))
+	game_over_label.add_theme_font_size_override("font_size", 30)
+	game_over_label.offset_left = -240.0
+	game_over_label.offset_right = 240.0
+	final_score_label.add_theme_font_size_override("font_size", 21)
+	final_score_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+
+func _style_hud_label(label: Label, color: Color, font_size: int) -> void:
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_shadow_color", Color(0.1, 0.65, 0.9, 0.35))
+	label.add_theme_constant_override("shadow_offset_x", 0)
+	label.add_theme_constant_override("shadow_offset_y", 1)
+	label.add_theme_constant_override("outline_size", 0)
+
+
+func _style_game_button(button: Button, color: Color) -> void:
+	button.custom_minimum_size = Vector2(150.0, 46.0)
+	button.add_theme_font_size_override("font_size", 16)
+	button.add_theme_color_override("font_color", Color("#e6f6ff"))
+	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	button.add_theme_stylebox_override("normal", _game_button_style(color))
+	button.add_theme_stylebox_override("hover", _game_button_style(color.lightened(0.18)))
+	button.add_theme_stylebox_override("pressed", _game_button_style(color.darkened(0.12)))
+	button.mouse_entered.connect(_animate_hud_button.bind(button, true))
+	button.mouse_exited.connect(_animate_hud_button.bind(button, false))
+	button.focus_entered.connect(_animate_hud_button.bind(button, true))
+	button.focus_exited.connect(_animate_hud_button.bind(button, false))
+	button.button_down.connect(_animate_hud_button_press.bind(button, true))
+	button.button_up.connect(_animate_hud_button_press.bind(button, false))
+
+
+func _game_button_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.border_color = color.lightened(0.2)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(10)
+	style.content_margin_left = 14.0
+	style.content_margin_right = 14.0
+	style.content_margin_top = 8.0
+	style.content_margin_bottom = 8.0
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.2)
+	style.shadow_size = 5
+	style.shadow_offset = Vector2(0.0, 3.0)
+	return style
+
+
+func _build_pause_overlay() -> void:
+	pause_overlay = Control.new()
+	pause_overlay.name = "PauseOverlay"
+	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.visible = false
+	pause_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	$HUD.add_child(pause_overlay)
+
+	var shade := ColorRect.new()
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.color = Color(0.01, 0.025, 0.06, 0.78)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_overlay.add_child(shade)
+
+	pause_card = PanelContainer.new()
+	pause_card.custom_minimum_size = Vector2(360.0, 250.0)
+	pause_card.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	pause_card.offset_left = -180.0
+	pause_card.offset_top = -125.0
+	pause_card.offset_right = 180.0
+	pause_card.offset_bottom = 125.0
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("#0f1f34")
+	style.border_color = Color("#45b9d2")
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(18)
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.4)
+	style.shadow_size = 18
+	pause_card.add_theme_stylebox_override("panel", style)
+	pause_overlay.add_child(pause_card)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 28)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 22)
+	margin.add_theme_constant_override("margin_bottom", 22)
+	pause_card.add_child(margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 12)
+	margin.add_child(layout)
+	var title := Label.new()
+	title.text = "PAUSED"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color("#61e7df"))
+	layout.add_child(title)
+	layout.add_child(_make_game_button("RESUME", _toggle_pause, Color("#17665f")))
+	layout.add_child(_make_game_button("MAIN MENU", _return_to_main_menu, Color("#263b59")))
+
+
+func _make_game_button(text: String, callback: Callable, color: Color) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size.y = 46.0
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.pressed.connect(callback)
+	_style_game_button(button, color)
+	return button
+
+
+func _animate_hud_button(button: Button, highlighted: bool) -> void:
+	if not is_instance_valid(button) or button.disabled:
+		return
+	var key := button.get_instance_id()
+	var previous: Variant = hud_button_tweens.get(key)
+	if previous is Tween and is_instance_valid(previous):
+		previous.kill()
+	button.pivot_offset = button.size * 0.5
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(true)
+	tween.tween_property(button, "scale", Vector2.ONE * (1.025 if highlighted else 1.0), 0.12)
+	tween.tween_property(button, "modulate", Color(1.06, 1.1, 1.13, 1.0) if highlighted else Color.WHITE, 0.12)
+	hud_button_tweens[key] = tween
+
+
+func _animate_hud_button_press(button: Button, pressed: bool) -> void:
+	if pressed:
+		var key := button.get_instance_id()
+		var previous: Variant = hud_button_tweens.get(key)
+		if previous is Tween and is_instance_valid(previous):
+			previous.kill()
+		var tween := create_tween()
+		tween.tween_property(button, "scale", Vector2.ONE * 0.97, 0.07)
+		hud_button_tweens[key] = tween
+	else:
+		_animate_hud_button(button, button.is_hovered() or button.has_focus())
+
+
+func _bump_score_display() -> void:
+	if score_bump_tween != null and score_bump_tween.is_running():
+		score_bump_tween.kill()
+	score_label.pivot_offset = score_label.size * 0.5
+	score_label.scale = Vector2.ONE * 1.12
+	score_label.modulate = Color("#fff2ca")
+	score_bump_tween = create_tween()
+	score_bump_tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	score_bump_tween.set_parallel(true)
+	score_bump_tween.tween_property(score_label, "scale", Vector2.ONE, 0.22)
+	score_bump_tween.tween_property(score_label, "modulate", Color.WHITE, 0.22)

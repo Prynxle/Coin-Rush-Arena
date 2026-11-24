@@ -13,6 +13,9 @@ var pursuit_aggression_multiplier: float = 1.0
 var pursuit_velocity: Vector2 = Vector2.ZERO
 var difficulty_settings: Dictionary = {}
 var hit_flash_remaining: float = 0.0
+var idle_time: float = 0.0
+var is_spawning: bool = true
+var is_eliminating: bool = false
 
 @onready var visual: Polygon2D = $Visual
 
@@ -22,14 +25,26 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 	current_health = maxi(max_health, 1)
 	_apply_difficulty_settings()
+	visual.scale = Vector2.ONE * 0.55
+	visual.modulate.a = 0.0
+	var spawn_tween := create_tween()
+	spawn_tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	spawn_tween.set_parallel(true)
+	spawn_tween.tween_property(visual, "scale", Vector2.ONE, 0.22)
+	spawn_tween.tween_property(visual, "modulate:a", 1.0, 0.14)
+	spawn_tween.chain().tween_callback(func() -> void: is_spawning = false)
 
 
 func _process(delta: float) -> void:
-	if hit_flash_remaining <= 0.0:
+	if is_eliminating:
 		return
-	hit_flash_remaining = maxf(hit_flash_remaining - delta, 0.0)
-	if hit_flash_remaining == 0.0:
-		visual.color = Color(0.9, 0.2, 0.25, 1.0)
+	idle_time += delta
+	if not is_spawning and hit_flash_remaining <= 0.0:
+		visual.scale = Vector2(1.0 + sin(idle_time * 3.0) * 0.025, 1.0 - sin(idle_time * 3.0) * 0.025)
+	if hit_flash_remaining > 0.0:
+		hit_flash_remaining = maxf(hit_flash_remaining - delta, 0.0)
+		if hit_flash_remaining == 0.0:
+			visual.color = Color(0.9, 0.2, 0.25, 1.0)
 
 
 func _physics_process(delta: float) -> void:
@@ -85,11 +100,24 @@ func _on_body_entered(body: Node2D) -> void:
 
 
 func eliminate() -> void:
-	queue_free()
+	if is_eliminating:
+		return
+	is_eliminating = true
+	remove_from_group("enemies")
+	set_physics_process(false)
+	set_process(false)
+	set_deferred("monitoring", false)
+	$CollisionShape2D.set_deferred("disabled", true)
+	var death_tween := create_tween()
+	death_tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	death_tween.set_parallel(true)
+	death_tween.tween_property(visual, "scale", Vector2.ONE * 0.15, 0.14)
+	death_tween.tween_property(visual, "modulate:a", 0.0, 0.14)
+	death_tween.chain().tween_callback(queue_free)
 
 
 func take_damage(amount: int) -> void:
-	if amount <= 0 or is_queued_for_deletion():
+	if amount <= 0 or is_queued_for_deletion() or is_eliminating:
 		return
 
 	current_health = maxi(current_health - amount, 0)
@@ -99,6 +127,9 @@ func take_damage(amount: int) -> void:
 
 	visual.color = Color.WHITE
 	hit_flash_remaining = 0.1
+	var hit_tween := create_tween()
+	hit_tween.tween_property(visual, "scale", Vector2.ONE * 1.16, 0.05)
+	hit_tween.tween_property(visual, "scale", Vector2.ONE, 0.09)
 
 
 func _apply_difficulty_settings() -> void:

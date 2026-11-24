@@ -2,17 +2,19 @@ extends Control
 
 const GAME_SCENE_PATH: String = "res://scenes/Main.tscn"
 
-const BACKGROUND_COLOR: Color = Color("#0a1422")
-const PANEL_COLOR: Color = Color("#101f32")
-const CARD_COLOR: Color = Color("#172b42")
-const ACCENT_COLOR: Color = Color("#63d6c3")
-const MUTED_COLOR: Color = Color("#9bb0c5")
-const BUTTON_COLOR: Color = Color("#1b3550")
-const BUTTON_HOVER_COLOR: Color = Color("#294a65")
-const BUTTON_PRESSED_COLOR: Color = Color("#245e5b")
+const BACKGROUND_COLOR: Color = Color("#07111f")
+const PANEL_COLOR: Color = Color("#101d31")
+const CARD_COLOR: Color = Color("#152840")
+const ACCENT_COLOR: Color = Color("#61e7df")
+const MUTED_COLOR: Color = Color("#91a9c3")
+const BUTTON_COLOR: Color = Color("#172c45")
+const BUTTON_HOVER_COLOR: Color = Color("#22435e")
+const BUTTON_PRESSED_COLOR: Color = Color("#1c595b")
 const SKIN_PREVIEW_SCRIPT: Script = preload("res://scripts/skin_preview.gd")
+const MENU_BACKDROP_SCRIPT: Script = preload("res://scripts/menu_backdrop.gd")
 
 var menu_panel: PanelContainer
+var menu_layout: VBoxContainer
 var credits_panel: PanelContainer
 var shop_panel: PanelContainer
 var difficulty_panel: PanelContainer
@@ -33,9 +35,16 @@ var difficulty_feedback_label: Label
 var unlimited_time_toggle: CheckButton
 var difficulty_status_labels: Dictionary = {}
 var difficulty_action_buttons: Dictionary = {}
+var difficulty_list: VBoxContainer
+var difficulty_scroll: ScrollContainer
+var shop_scroll: ScrollContainer
+var shop_preview_center: CenterContainer
 var player_stats: Node
 var skin_catalog: Node
 var difficulty_config: Node
+var screen_tween: Tween
+var button_tweens: Dictionary = {}
+var feedback_tweens: Dictionary = {}
 
 
 func _ready() -> void:
@@ -50,6 +59,7 @@ func _build_interface() -> void:
 	background.color = BACKGROUND_COLOR
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	background.set_script(MENU_BACKDROP_SCRIPT)
 	add_child(background)
 
 	var center := CenterContainer.new()
@@ -59,8 +69,8 @@ func _build_interface() -> void:
 	menu_panel = _make_panel(500.0)
 	center.add_child(menu_panel)
 	var menu_margin := _make_margin(menu_panel)
-	var menu_layout := VBoxContainer.new()
-	menu_layout.add_theme_constant_override("separation", 14)
+	menu_layout = VBoxContainer.new()
+	menu_layout.add_theme_constant_override("separation", 8)
 	menu_margin.add_child(menu_layout)
 
 	var title := _make_label("COIN RUSH ARENA", 38, ACCENT_COLOR)
@@ -99,6 +109,7 @@ func _build_interface() -> void:
 
 	_build_difficulty_panel(center)
 	_build_shop(center)
+	_animate_panel_entrance(menu_panel)
 
 
 func _make_panel(width: float) -> PanelContainer:
@@ -109,6 +120,9 @@ func _make_panel(width: float) -> PanelContainer:
 	style.border_color = Color("#29445d")
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(18)
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.3)
+	style.shadow_size = 14
+	style.shadow_offset = Vector2(0.0, 6.0)
 	style.content_margin_left = 1.0
 	style.content_margin_right = 1.0
 	style.content_margin_top = 1.0
@@ -159,7 +173,7 @@ func _make_stat_card(caption: String, value: Label) -> PanelContainer:
 func _make_button(text: String, callback: Callable, font_color: Color = Color.WHITE) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(0.0, 48.0)
+	button.custom_minimum_size = Vector2(0.0, 44.0)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.focus_mode = Control.FOCUS_ALL
 	button.add_theme_font_size_override("font_size", 16)
@@ -171,6 +185,13 @@ func _make_button(text: String, callback: Callable, font_color: Color = Color.WH
 	button.add_theme_stylebox_override("pressed", _button_style(BUTTON_PRESSED_COLOR))
 	button.add_theme_stylebox_override("focus", _button_style(BUTTON_HOVER_COLOR))
 	button.pressed.connect(callback)
+	button.mouse_entered.connect(_animate_button.bind(button, true))
+	button.mouse_exited.connect(_animate_button.bind(button, false))
+	button.focus_entered.connect(_animate_button.bind(button, true))
+	button.focus_exited.connect(_animate_button.bind(button, false))
+	button.button_down.connect(_animate_button_press.bind(button, true))
+	button.button_up.connect(_animate_button_press.bind(button, false))
+	button.resized.connect(_center_button_pivot.bind(button), CONNECT_ONE_SHOT)
 	return button
 
 
@@ -220,31 +241,159 @@ func _button_style(color: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
 	style.set_corner_radius_all(10)
+	style.border_color = color.lightened(0.16)
+	style.set_border_width_all(1)
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.2)
+	style.shadow_size = 5
+	style.shadow_offset = Vector2(0.0, 3.0)
 	style.content_margin_top = 8.0
 	style.content_margin_bottom = 8.0
 	return style
 
 
+func _center_button_pivot(button: Button) -> void:
+	button.pivot_offset = button.size * 0.5
+
+
+func _animate_button(button: Button, highlighted: bool) -> void:
+	if not is_instance_valid(button) or button.disabled:
+		return
+	var key := button.get_instance_id()
+	var previous: Variant = button_tweens.get(key)
+	if previous is Tween and is_instance_valid(previous):
+		previous.kill()
+	button.pivot_offset = button.size * 0.5
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(true)
+	tween.tween_property(button, "scale", Vector2.ONE * (1.025 if highlighted else 1.0), 0.12)
+	tween.tween_property(button, "modulate", Color(1.08, 1.1, 1.14, 1.0) if highlighted else Color.WHITE, 0.12)
+	button_tweens[key] = tween
+
+
+func _animate_button_press(button: Button, pressed: bool) -> void:
+	if pressed:
+		var key := button.get_instance_id()
+		var previous: Variant = button_tweens.get(key)
+		if previous is Tween and is_instance_valid(previous):
+			previous.kill()
+		var tween := create_tween()
+		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tween.tween_property(button, "scale", Vector2.ONE * 0.97, 0.07)
+		button_tweens[key] = tween
+	else:
+		_animate_button(button, button.is_hovered() or button.has_focus())
+
+
+func _animate_panel_entrance(panel: PanelContainer) -> void:
+	if not is_instance_valid(panel):
+		return
+	panel.visible = true
+	panel.modulate.a = 0.0
+	panel.scale = Vector2.ONE * 0.975
+	panel.resized.connect(_center_panel_pivot.bind(panel), CONNECT_ONE_SHOT)
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(true)
+	tween.tween_property(panel, "modulate:a", 1.0, 0.22)
+	tween.tween_property(panel, "scale", Vector2.ONE, 0.22)
+
+
+func _center_panel_pivot(panel: PanelContainer) -> void:
+	panel.pivot_offset = panel.size * 0.5
+
+
+func _show_screen(target: PanelContainer) -> void:
+	if screen_tween != null and screen_tween.is_running():
+		screen_tween.kill()
+	var panels: Array[PanelContainer] = [menu_panel, credits_panel, shop_panel, difficulty_panel]
+	for panel in panels:
+		if panel != target:
+			panel.visible = false
+		panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	target.visible = true
+	target.modulate.a = 0.0
+	target.scale = Vector2.ONE * 0.975
+	target.pivot_offset = target.size * 0.5
+	screen_tween = create_tween()
+	screen_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	screen_tween.set_parallel(true)
+	screen_tween.tween_property(target, "modulate:a", 1.0, 0.2)
+	screen_tween.tween_property(target, "scale", Vector2.ONE, 0.2)
+
+
+func _notification(what: int) -> void:
+	if (
+		what != NOTIFICATION_RESIZED
+		or not is_instance_valid(menu_panel)
+		or not is_instance_valid(credits_panel)
+		or not is_instance_valid(difficulty_panel)
+		or not is_instance_valid(shop_panel)
+	):
+		return
+	var available_width := maxf(size.x - 28.0, 320.0)
+	menu_panel.custom_minimum_size.x = minf(500.0, available_width)
+	menu_panel.custom_minimum_size.y = minf(456.0, maxf(size.y - 24.0, 360.0))
+	credits_panel.custom_minimum_size.x = minf(420.0, available_width)
+	difficulty_panel.custom_minimum_size.x = minf(900.0, available_width)
+	shop_panel.custom_minimum_size.x = minf(960.0, available_width)
+	difficulty_panel.custom_minimum_size.y = minf(560.0, maxf(size.y - 28.0, 360.0))
+	shop_panel.custom_minimum_size.y = minf(540.0, maxf(size.y - 28.0, 360.0))
+	if is_instance_valid(difficulty_scroll):
+		difficulty_scroll.custom_minimum_size.y = minf(300.0, maxf(size.y - 330.0, 110.0))
+	if is_instance_valid(shop_scroll):
+		shop_scroll.custom_minimum_size.y = minf(400.0, maxf(size.y - 280.0, 140.0))
+	if is_instance_valid(shop_preview_center):
+		shop_preview_center.custom_minimum_size.y = minf(200.0, maxf(size.y * 0.28, 100.0))
+	if is_instance_valid(shop_preview):
+		var preview_size := minf(
+			190.0,
+			minf(maxf(shop_panel.custom_minimum_size.x - 280.0, 100.0), maxf(size.y - 350.0, 100.0))
+		)
+		shop_preview.custom_minimum_size = Vector2(preview_size, preview_size)
+	var shop_inner_width := maxf(shop_panel.custom_minimum_size.x - 72.0, 210.0)
+	var shop_list_width := minf(340.0, shop_inner_width * 0.44)
+	if is_instance_valid(skin_list):
+		var list_column := skin_list.get_parent().get_parent() as VBoxContainer
+		list_column.custom_minimum_size.x = shop_list_width
+	if is_instance_valid(menu_layout):
+		menu_layout.add_theme_constant_override("separation", 8 if size.y < 620.0 else 12)
+	var layout_panels: Array[PanelContainer] = [menu_panel, credits_panel, difficulty_panel, shop_panel]
+	for panel in layout_panels:
+		var margin := panel.get_child(0) as MarginContainer
+		if margin != null:
+			var vertical_margin := 14 if size.y < 620.0 else 24
+			margin.add_theme_constant_override("margin_top", vertical_margin)
+			margin.add_theme_constant_override("margin_bottom", vertical_margin)
+
+
 func _start_game() -> void:
-	var change_error := get_tree().change_scene_to_file(GAME_SCENE_PATH)
-	if change_error != OK:
-		push_error("Could not start the game: " + error_string(change_error))
+	var fade := ColorRect.new()
+	fade.color = Color(0.02, 0.05, 0.1, 0.0)
+	fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	fade.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(fade)
+	var transition := create_tween()
+	transition.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	transition.tween_property(fade, "color:a", 1.0, 0.2)
+	transition.tween_callback(func() -> void:
+		var change_error := get_tree().change_scene_to_file(GAME_SCENE_PATH)
+		if change_error != OK:
+			fade.queue_free()
+			push_error("Could not start the game: " + error_string(change_error))
+	)
 
 
 func _show_credits() -> void:
-	menu_panel.visible = false
-	shop_panel.visible = false
-	difficulty_panel.visible = false
-	credits_panel.visible = true
+	_show_screen(credits_panel)
 
 
 func _show_menu() -> void:
-	credits_panel.visible = false
-	shop_panel.visible = false
-	difficulty_panel.visible = false
-	menu_panel.visible = true
+	_show_screen(menu_panel)
 	menu_total_coins_value.text = str(_stats_int("total_coins"))
 	menu_best_score_value.text = str(_stats_int("best_score"))
+	_animate_feedback(menu_total_coins_value, ACCENT_COLOR)
+	_animate_feedback(menu_best_score_value, Color("#ffd479"))
 
 
 func _build_difficulty_panel(center: CenterContainer) -> void:
@@ -266,19 +415,28 @@ func _build_difficulty_panel(center: CenterContainer) -> void:
 	unlimited_time_toggle.toggled.connect(_on_unlimited_time_toggled)
 	layout.add_child(unlimited_time_toggle)
 	layout.add_child(HSeparator.new())
+	difficulty_scroll = ScrollContainer.new()
+	difficulty_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	difficulty_scroll.custom_minimum_size.y = 150.0
+	layout.add_child(difficulty_scroll)
+	difficulty_list = VBoxContainer.new()
+	difficulty_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	difficulty_list.add_theme_constant_override("separation", 6)
+	difficulty_scroll.add_child(difficulty_list)
 
 	for mode in _all_difficulty_modes():
 		var difficulty_id: String = mode["id"]
 		var row := HBoxContainer.new()
 		row.custom_minimum_size.y = 74.0
 		row.add_theme_constant_override("separation", 14)
-		layout.add_child(row)
+		difficulty_list.add_child(row)
 
 		var mode_info := VBoxContainer.new()
 		mode_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		mode_info.add_theme_constant_override("separation", 2)
 		row.add_child(mode_info)
 		var name_label := _make_label(str(mode["name"]), 18, Color.WHITE)
+		name_label.add_theme_color_override("font_color", _difficulty_color(difficulty_id))
 		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		mode_info.add_child(name_label)
 		var description_label := _make_label(str(mode["description"]), 12, MUTED_COLOR)
@@ -307,6 +465,20 @@ func _difficulty_requirement_text(mode: Dictionary) -> String:
 	if requirement == 0:
 		return "Run record: none  |  Price: free"
 	return "Run record: %d coins  |  Price: %d lifetime coins" % [requirement, price]
+
+
+func _difficulty_color(difficulty_id: String) -> Color:
+	match difficulty_id:
+		"easy":
+			return Color("#62e5c4")
+		"medium":
+			return Color("#58dff2")
+		"hard":
+			return Color("#ffbe5c")
+		"doomsday":
+			return Color("#ff6b9a")
+		_:
+			return Color.WHITE
 
 
 func _difficulty_status(difficulty_id: String, mode: Dictionary) -> String:
@@ -355,10 +527,7 @@ func _refresh_difficulty_panel() -> void:
 
 
 func _show_difficulty_panel() -> void:
-	menu_panel.visible = false
-	credits_panel.visible = false
-	shop_panel.visible = false
-	difficulty_panel.visible = true
+	_show_screen(difficulty_panel)
 	difficulty_feedback_label.text = ""
 	unlimited_time_toggle.button_pressed = _stats_bool("unlimited_time_enabled")
 	_refresh_difficulty_panel()
@@ -393,6 +562,10 @@ func _on_difficulty_action(difficulty_id: String) -> void:
 		difficulty_feedback_label.text = "Could not save this purchase."
 
 	_refresh_difficulty_panel()
+	var feedback_color := ACCENT_COLOR
+	if difficulty_feedback_label.text.begins_with("Reach") or difficulty_feedback_label.text.begins_with("Not enough") or difficulty_feedback_label.text.begins_with("Could not"):
+		feedback_color = Color("#ff8b9e")
+	_animate_feedback(difficulty_feedback_label, feedback_color)
 
 
 func _build_shop(center: CenterContainer) -> void:
@@ -413,14 +586,14 @@ func _build_shop(center: CenterContainer) -> void:
 	shop_balance_label = _make_label("Lifetime coins: 0", 16, MUTED_COLOR)
 	list_column.add_child(shop_balance_label)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(340.0, 400.0)
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	list_column.add_child(scroll)
+	shop_scroll = ScrollContainer.new()
+	shop_scroll.custom_minimum_size = Vector2(340.0, 400.0)
+	shop_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_column.add_child(shop_scroll)
 	skin_list = VBoxContainer.new()
 	skin_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	skin_list.add_theme_constant_override("separation", 8)
-	scroll.add_child(skin_list)
+	shop_scroll.add_child(skin_list)
 
 	for skin in _all_skins():
 		var skin_id: String = skin["id"]
@@ -437,18 +610,18 @@ func _build_shop(center: CenterContainer) -> void:
 
 	var detail_column := VBoxContainer.new()
 	detail_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail_column.add_theme_constant_override("separation", 12)
+	detail_column.add_theme_constant_override("separation", 8)
 	columns.add_child(detail_column)
 	shop_selected_name = _make_label("", 28, Color.WHITE)
 	detail_column.add_child(shop_selected_name)
 	shop_description = _make_label("", 15, MUTED_COLOR)
 	detail_column.add_child(shop_description)
-	var preview_center := CenterContainer.new()
-	preview_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	preview_center.custom_minimum_size.y = 200.0
-	detail_column.add_child(preview_center)
+	shop_preview_center = CenterContainer.new()
+	shop_preview_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	shop_preview_center.custom_minimum_size.y = 200.0
+	detail_column.add_child(shop_preview_center)
 	shop_preview = _make_skin_preview(selected_skin_id, Vector2(190.0, 190.0))
-	preview_center.add_child(shop_preview)
+	shop_preview_center.add_child(shop_preview)
 	shop_status_label = _make_label("", 16, ACCENT_COLOR)
 	detail_column.add_child(shop_status_label)
 	shop_feedback_label = _make_label("", 14, MUTED_COLOR)
@@ -468,9 +641,7 @@ func _make_skin_preview(skin_id: String, minimum_size: Vector2) -> Control:
 
 
 func _show_shop() -> void:
-	menu_panel.visible = false
-	credits_panel.visible = false
-	shop_panel.visible = true
+	_show_screen(shop_panel)
 	selected_skin_id = _stats_string("equipped_skin_id")
 	shop_feedback_label.text = ""
 	_refresh_shop()
@@ -480,6 +651,10 @@ func _select_skin(skin_id: String) -> void:
 	selected_skin_id = skin_id
 	shop_feedback_label.text = ""
 	_refresh_shop()
+	shop_preview.scale = Vector2.ONE * 0.88
+	var preview_tween := create_tween()
+	preview_tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	preview_tween.tween_property(shop_preview, "scale", Vector2.ONE, 0.18)
 
 
 func _refresh_shop() -> void:
@@ -490,10 +665,8 @@ func _refresh_shop() -> void:
 		var status := _skin_status(skin_id)
 		var row_button := skin_row_buttons[skin_id] as Button
 		row_button.text = "%s\n%d coins  |  %s" % [skin["name"], skin["price"], status]
-		row_button.add_theme_stylebox_override(
-			"normal",
-			_button_style(BUTTON_HOVER_COLOR if skin_id == selected_skin_id else BUTTON_COLOR)
-		)
+		var selected_color := BUTTON_HOVER_COLOR if skin_id == selected_skin_id else BUTTON_COLOR
+		row_button.add_theme_stylebox_override("normal", _button_style(selected_color))
 
 	var selected_skin := _skin_definition(selected_skin_id)
 	if selected_skin.is_empty():
@@ -512,6 +685,7 @@ func _refresh_shop() -> void:
 		shop_action_button.text = "EQUIP"
 	else:
 		shop_action_button.text = "PURCHASE FOR %d COINS" % selected_skin["price"]
+	shop_action_button.add_theme_color_override("font_color", ACCENT_COLOR)
 
 
 func _skin_status(skin_id: String) -> String:
@@ -541,7 +715,27 @@ func _perform_skin_action() -> void:
 			shop_feedback_label.text = "Purchase could not be saved. Please try again."
 
 	_refresh_shop()
+	var feedback_color := ACCENT_COLOR
+	if shop_feedback_label.text.begins_with("Not enough") or shop_feedback_label.text.begins_with("Could not") or shop_feedback_label.text.begins_with("Purchase could not"):
+		feedback_color = Color("#ff8b9e")
+	_animate_feedback(shop_feedback_label, feedback_color)
 
 
 func _quit_game() -> void:
 	get_tree().quit()
+
+
+func _animate_feedback(control: Control, color: Color) -> void:
+	var key := control.get_instance_id()
+	var previous: Variant = feedback_tweens.get(key)
+	if previous is Tween and is_instance_valid(previous):
+		previous.kill()
+	control.pivot_offset = control.size * 0.5
+	control.scale = Vector2.ONE * 0.96
+	control.modulate = color
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(true)
+	tween.tween_property(control, "scale", Vector2.ONE, 0.2)
+	tween.tween_property(control, "modulate", Color.WHITE, 0.32)
+	feedback_tweens[key] = tween
